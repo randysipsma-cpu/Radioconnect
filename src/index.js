@@ -7,6 +7,7 @@ async function hashPassword(password,salt){const key=await crypto.subtle.importK
 function equal(a,b){if(a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
 function cookie(request){return request.headers.get("cookie")?.split(";").map(s=>s.trim()).find(s=>s.startsWith("rc_session="))?.slice(11)||"";}
 async function identity(request,db){const token=cookie(request);if(!/^[a-f0-9]{64}$/.test(token))return null;return db.prepare("SELECT users.id,users.display_name FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at > ?").bind(await digest(token),Date.now()).first();}
+async function audit(db,stationId,actorId,action,targetId,details={}){try{await db.prepare("INSERT INTO station_audit_log(id,station_id,actor_user_id,action,target_user_id,details,created_at) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),stationId,actorId,action,targetId||null,JSON.stringify(details),Date.now()).run();}catch(error){console.error("Station audit unavailable",error);}}
 const secureCookie=(token,maxAge)=>`rc_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=${maxAge}`;
 export default {async fetch(request,env){
 const url=new URL(request.url),path=url.pathname;
@@ -111,7 +112,15 @@ const id=path.split("/")[3],name=String(body.name||"").trim();
 if(name.length<2||name.length>80)return json({error:"Stationsnaam moet 2 tot 80 tekens bevatten"},400);
 const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND owner_user_id=?").bind(name,id,user.id).run();
 if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
-return json({ok:true,id,name});
+await audit(env.DB,id,user.id,"station.rename",null,{name});return json({ok:true,id,name});
+}
+const auditRoute=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/audit$/);
+if(auditRoute&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const membership=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(auditRoute[1],user.id).first();
+if(!membership||!["owner","admin"].includes(membership.role))return json({error:"Geen toegang tot het beveiligingslogboek"},403);
+const rows=await env.DB.prepare("SELECT l.id,l.action,l.target_user_id,l.details,l.created_at,u.display_name AS actor_name FROM station_audit_log l JOIN users u ON u.id=l.actor_user_id WHERE l.station_id=? ORDER BY l.created_at DESC LIMIT 100").bind(auditRoute[1]).all();
+return json({events:rows.results});
 }
 // Station-scoped roles: owner is immutable; admins can manage DJs and members only.
 const stationMembers=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members$/);
@@ -134,7 +143,7 @@ if(!target)return json({error:"Lid niet gevonden"},404);
 if(target.role==="owner"||targetId===user.id)return json({error:"Je kunt de eigenaar of je eigen rol niet wijzigen"},403);
 if(actor.role==="admin"&&(target.role==="admin"||role==="admin"))return json({error:"Alleen de eigenaar kan admins aanstellen of wijzigen"},403);
 await env.DB.prepare("UPDATE station_members SET role=? WHERE station_id=? AND user_id=? AND role=?").bind(role,stationId,targetId,target.role).run();
-return json({ok:true,role});
+await audit(env.DB,stationId,user.id,"member.role_change",targetId,{from:target.role,to:role});return json({ok:true,role});
 }
 // Removing a station member is restricted to owners and admins; the owner cannot be removed.
 const removeMember=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members\/([a-f0-9-]{36})\/remove$/);
@@ -145,7 +154,7 @@ const actor=await env.DB.prepare("SELECT role FROM station_members WHERE station
 const target=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationId,targetId).first();
 if(!actor||!["owner","admin"].includes(actor.role)||!target||target.role==="owner"||targetId===user.id||actor.role==="admin"&&target.role==="admin")return json({error:"Geen rechten om dit lid te verwijderen"},403);
 await env.DB.prepare("DELETE FROM station_members WHERE station_id=? AND user_id=? AND role=?").bind(stationId,targetId,target.role).run();
-return json({ok:true});
+await audit(env.DB,stationId,user.id,"member.remove",targetId,{previous_role:target.role});return json({ok:true});
 }
 // Owners invite registered or future users by email; the invitee must explicitly accept.
 const stationInvite=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/invitations$/);
@@ -158,7 +167,7 @@ const email=String(body.email||"").trim().toLowerCase();
 if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
 const id=crypto.randomUUID(),now=Date.now(),expires=now+7*86400000;
 await env.DB.prepare("INSERT INTO station_invitations(id,station_id,email,invited_by,created_at,expires_at,accepted_at) VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(station_id,email) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,created_at=excluded.created_at,expires_at=excluded.expires_at,accepted_at=NULL").bind(id,station.id,email,user.id,now,expires).run();
-return json({ok:true,email,expires_at:expires,invite_url:url.origin+"/?invite="+encodeURIComponent(id)},201);
+await audit(env.DB,station.id,user.id,"invitation.create",null,{email});return json({ok:true,email,expires_at:expires,invite_url:url.origin+"/?invite="+encodeURIComponent(id)},201);
 }
 if(path==="/api/invitations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
