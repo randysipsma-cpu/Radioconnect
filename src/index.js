@@ -16,6 +16,17 @@ if(!["GET","POST"].includes(request.method))return json({error:"Methode niet toe
 if(request.method==="POST"&&(request.headers.get("origin")!==url.origin||!request.headers.get("content-type")?.startsWith("application/json")))return json({error:"Ongeldige aanvraag"},403);
 let body={};if(request.method==="POST"){if(Number(request.headers.get("content-length")||0)>4096)return json({error:"Aanvraag te groot"},413);try{body=await request.json();if(JSON.stringify(body).length>4096)throw Error();}catch{return json({error:"Ongeldige JSON"},400);}}
 try{
+if(path==="/api/crypto-check"&&request.method==="GET"){
+// Isolated password-hashing self-test: no credentials, user data or D1 writes.
+try{
+const salt="radioconnect-self-test-v1";
+const first=await hashPassword("RadioConnect-TestPassword-2026!",salt);
+const second=await hashPassword("RadioConnect-TestPassword-2026!",salt);
+const different=await hashPassword("RadioConnect-TestPassword-2026?",salt);
+const ok=/^[a-f0-9]{64}$/.test(first)&&equal(first,second)&&!equal(first,different);
+return json({status:ok?"ok":"failed",checks:{pbkdf2:ok?"ok":"failed",deterministic:equal(first,second),password_separation:!equal(first,different)},database_untouched:true},ok?200:503);
+}catch(error){console.error("Crypto self-test failed",error);return json({status:"failed",checks:{pbkdf2:"failed"},database_untouched:true},503);}
+}
 if(path==="/api/health"&&request.method==="GET"){
 const checks={binding:"connected",database:"pending",users:"pending",credentials:"pending",sessions:"pending"};
 const run=async(label,sql)=>{try{await env.DB.prepare(sql).first();checks[label]="ok";}catch(err){const message=String(err?.message||err||"");checks[label]=/no such table/i.test(message)?"missing_table":/limit|quota|exceeded/i.test(message)?"quota_or_limit":"query_failed";console.error("Health check "+label,err);}};
