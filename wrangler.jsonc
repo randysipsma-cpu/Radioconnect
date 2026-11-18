@@ -4,5 +4,14 @@
   "assets": {
     "directory": "./public"
   },
-  "previews": {}
+  "previews": {},
+  "main": "./src/index.js",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "radioconnect-db",
+      "database_id": "5bbb908e-e22f-4a37-874d-e121ce6510ec",
+      "migrations_dir": "schema"
+    }
+  ]
 }
