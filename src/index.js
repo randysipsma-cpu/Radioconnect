@@ -47,7 +47,7 @@ if(path==="/api/register"&&request.method==="POST"){
 const email=String(body.email||"").trim().toLowerCase(),password=String(body.password||""),name=String(body.name||"").trim();
 const stationName=String(body.station_name||"").trim();
 if(name.length<2||name.length>80)return json({error:"Naam moet 2 tot 80 tekens bevatten"},400);
-if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)||email.length>254)return json({error:"Controleer het e-mailadres"},400);
+if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json({error:"Controleer het e-mailadres"},400);
 if(password.length<12||password.length>128)return json({error:"Wachtwoord moet 12 tot 128 tekens bevatten"},400);
 if(stationName&&(stationName.length<2||stationName.length>80))return json({error:"Stationsnaam moet 2 tot 80 tekens bevatten"},400);
 const salt=crypto.randomUUID(),hash=await hashPassword(password,salt),userId=crypto.randomUUID();
