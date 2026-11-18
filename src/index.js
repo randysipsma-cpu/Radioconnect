@@ -43,10 +43,26 @@ return json({status:ok?"ok":"degraded",checks},ok?200:503);
 }
 if(path==="/api/register"&&request.method==="POST"){
 const email=String(body.email||"").trim().toLowerCase(),password=String(body.password||""),name=String(body.name||"").trim();
-if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||password.length<12||password.length>128||name.length<2||name.length>80)return json({error:"Vul een geldige naam, e-mail en wachtwoord (minimaal 12 tekens) in"},400);
-const salt=crypto.randomUUID(),hash=await hashPassword(password,salt);
-try{await env.DB.prepare("INSERT INTO users (id,auth_subject,display_name) VALUES (?,?,?)").bind(crypto.randomUUID(),email,name).run();await env.DB.prepare("INSERT INTO credentials (user_id,salt,password_hash) SELECT id,?,? FROM users WHERE auth_subject=?").bind(salt,hash,email).run();}catch{return json({error:"Registratie niet mogelijk; e-mailadres mogelijk al in gebruik"},409);}
-return json({ok:true},201);
+const stationName=String(body.station_name||"").trim();
+if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)||email.length>254||password.length<12||password.length>128||name.length<2||name.length>80)return json({error:"Vul een geldige naam, e-mail en wachtwoord (minimaal 12 tekens) in"},400);
+if(stationName&&(stationName.length<2||stationName.length>80))return json({error:"Stationsnaam moet 2 tot 80 tekens bevatten"},400);
+const salt=crypto.randomUUID(),hash=await hashPassword(password,salt),userId=crypto.randomUUID();
+try{
+const queries=[
+env.DB.prepare("INSERT INTO users (id,auth_subject,display_name) VALUES (?,?,?)").bind(userId,email,name),
+env.DB.prepare("INSERT INTO credentials (user_id,salt,password_hash) VALUES (?,?,?)").bind(userId,salt,hash)
+];
+if(stationName){
+const stationId=crypto.randomUUID();
+queries.push(
+env.DB.prepare("INSERT INTO stations(id,name,visibility,owner_user_id) VALUES (?,?,'private',?)").bind(stationId,stationName,userId),
+env.DB.prepare("INSERT INTO station_members(station_id,user_id,role) VALUES (?,?,'owner')").bind(stationId,userId),
+env.DB.prepare("INSERT INTO rooms(id,station_id,name,visibility) VALUES (?,?,'algemeen','members')").bind(crypto.randomUUID(),stationId)
+);
+}
+await env.DB.batch(queries);
+}catch(error){console.error("Registration failed",error);return json({error:"Registratie niet mogelijk; e-mailadres mogelijk al in gebruik"},409);}
+return json({ok:true,station_created:!!stationName},201);
 }
 if(path==="/api/login"&&request.method==="POST"){
 const email=String(body.email||"").trim().toLowerCase(),password=String(body.password||"");
