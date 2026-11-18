@@ -80,6 +80,17 @@ const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND own
 if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
 return json({ok:true,id,name});
 }
+const roomSocket=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/live$/);
+if(roomSocket&&request.method==="GET"){
+if(request.headers.get("upgrade")?.toLowerCase()!=="websocket")return json({error:"WebSocket vereist"},426);
+if(request.headers.get("origin")!==url.origin)return json({error:"Ongeldige herkomst"},403);
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const room=await env.DB.prepare("SELECT r.id,r.visibility,m.role FROM rooms r JOIN station_members m ON m.station_id=r.station_id AND m.user_id=? WHERE r.id=?").bind(user.id,roomSocket[1]).first();
+if(!room||room.visibility==="management"&&!["owner","admin"].includes(room.role))return json({error:"Geen toegang"},403);
+if(!env.CHAT_ROOM)return json({error:"Realtime chat is nog niet geconfigureerd"},503);
+const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+return stub.fetch(new Request("https://internal/connect",{headers:{"Upgrade":"websocket","X-RC-User":user.id,"X-RC-Name":encodeURIComponent(user.display_name)}}));
+}
 // Station-scoped private chat: every request checks membership server-side.
 const stationRooms=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/rooms$/);
 if(stationRooms&&request.method==="GET"){
@@ -100,6 +111,8 @@ const message=String(body.message||"").trim();
 if(message.length<1||message.length>2000)return json({error:"Bericht moet 1 tot 2000 tekens bevatten"},400);
 const id=crypto.randomUUID(),created=Date.now();
 await env.DB.prepare("INSERT INTO chat_messages(id,room_id,user_id,body,created_at) VALUES(?,?,?,?,?)").bind(id,room.id,user.id,message,created).run();
+if(env.CHAT_ROOM){try{const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));await stub.fetch("https://internal/broadcast",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"message",message:{id,body:message,created_at:created,display_name:user.display_name}})});}catch(error){console.error("Chat realtime broadcast failed",error);}}
+
 return json({id,created_at:created},201);
 }
 const before=Number(url.searchParams.get("before")||0);
@@ -114,3 +127,20 @@ const rows=await env.DB.prepare("SELECT s.id,s.name,s.visibility,m.role FROM sta
 return json({error:"Niet gevonden"},404);
 }catch(error){console.error("API error",error);const detail=String(error?.message||error||"");if(/exceeded.*(?:row read|daily|limit)|free tier daily row read|D1_ERROR.*limit/i.test(detail))return json({error:"Cloudflare D1 heeft de dagelijkse leeslimiet bereikt. Probeer na 00:00 UTC opnieuw of verhoog de D1-limiet via je Cloudflare-abonnement.",code:"D1_DAILY_LIMIT"},503);if(/no such table/i.test(detail))return json({error:"De database mist een benodigde tabel. Controleer de database-migraties.",code:"DB_SCHEMA_MISSING"},503);return json({error:"Interne serverfout. Controleer de Worker-logs in Cloudflare Observability.",code:"SERVER_ERROR"},500);}
 }};
+export class ChatRoom {
+constructor(state,env){this.state=state;this.env=env;this.clients=new Map();}
+broadcast(data,exclude){const payload=JSON.stringify(data);for(const socket of this.state.getWebSockets()){if(socket===exclude)continue;try{socket.send(payload);}catch{try{socket.close();}catch{}}}}
+presence(){const clients=this.state.getWebSockets();const users=new Map();for(const socket of clients){const tags=this.state.getTags(socket);const id=tags.find(x=>x.startsWith("uid:"))?.slice(4),name=tags.find(x=>x.startsWith("name:"))?.slice(5);if(id)users.set(id,decodeURIComponent(name||"Gebruiker"));}this.broadcast({type:"presence",users:Array.from(users.values())});}
+async fetch(request){const url=new URL(request.url);
+if(url.pathname==="/connect"&&request.headers.get("upgrade")?.toLowerCase()==="websocket"){
+const id=request.headers.get("X-RC-User"),name=request.headers.get("X-RC-Name");if(!id||!name)return new Response("Forbidden",{status:403});
+const pair=new WebSocketPair(),client=pair[0],server=pair[1];
+this.state.acceptWebSocket(server,["uid:"+id,"name:"+name]);
+this.presence();return new Response(null,{status:101,webSocket:client});
+}
+if(url.pathname==="/broadcast"&&request.method==="POST"){const data=await request.json();if(data?.type==="message")this.broadcast(data);return new Response("ok");}
+return new Response("Not found",{status:404});}
+webSocketMessage(socket,message){try{const data=JSON.parse(message);if(data.type==="typing"){const tags=this.state.getTags(socket),name=tags.find(x=>x.startsWith("name:"))?.slice(5);this.broadcast({type:"typing",name:decodeURIComponent(name||"Gebruiker"),active:!!data.active},socket);}}catch{}}
+webSocketClose(socket){try{socket.close();}catch{}this.presence();}
+webSocketError(socket){try{socket.close();}catch{}this.presence();}
+}
