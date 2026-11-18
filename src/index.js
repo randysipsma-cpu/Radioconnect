@@ -111,7 +111,7 @@ await env.DB.prepare("INSERT OR IGNORE INTO station_members(station_id,user_id,r
 await env.DB.prepare("UPDATE station_invitations SET accepted_at=? WHERE id=? AND accepted_at IS NULL").bind(Date.now(),invite.id).run();
 return json({ok:true});
 }
-const liveCheck=path.match(/^\\/api\\/rooms\\/([a-f0-9-]{36})\\/live-check$/);
+const liveCheck=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/live-check$/);
 if(liveCheck&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({status:"error",code:"NOT_LOGGED_IN",error:"Je bent niet ingelogd"},401);
 const room=await env.DB.prepare("SELECT r.id,r.visibility,m.role FROM rooms r LEFT JOIN station_members m ON m.station_id=r.station_id AND m.user_id=? WHERE r.id=?").bind(user.id,liveCheck[1]).first();
