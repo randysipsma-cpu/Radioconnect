@@ -92,7 +92,7 @@ const station=await env.DB.prepare("SELECT id FROM stations WHERE id=? AND owner
 if(!station)return json({error:"Alleen de eigenaar kan uitnodigen"},403);
 if(request.method==="GET"){const rows=await env.DB.prepare("SELECT id,email,expires_at,accepted_at FROM station_invitations WHERE station_id=? ORDER BY created_at DESC LIMIT 100").bind(station.id).all();return json({invitations:rows.results});}
 const email=String(body.email||"").trim().toLowerCase();
-if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
+if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
 const id=crypto.randomUUID(),now=Date.now(),expires=now+7*86400000;
 await env.DB.prepare("INSERT INTO station_invitations(id,station_id,email,invited_by,created_at,expires_at,accepted_at) VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(station_id,email) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,created_at=excluded.created_at,expires_at=excluded.expires_at,accepted_at=NULL").bind(id,station.id,email,user.id,now,expires).run();
 return json({ok:true,email,expires_at:expires},201);
