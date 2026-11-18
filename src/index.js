@@ -84,6 +84,33 @@ const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND own
 if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
 return json({ok:true,id,name});
 }
+// Owners invite registered or future users by email; the invitee must explicitly accept.
+const stationInvite=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/invitations$/);
+if(stationInvite){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const station=await env.DB.prepare("SELECT id FROM stations WHERE id=? AND owner_user_id=?").bind(stationInvite[1],user.id).first();
+if(!station)return json({error:"Alleen de eigenaar kan uitnodigen"},403);
+if(request.method==="GET"){const rows=await env.DB.prepare("SELECT id,email,expires_at,accepted_at FROM station_invitations WHERE station_id=? ORDER BY created_at DESC LIMIT 100").bind(station.id).all();return json({invitations:rows.results});}
+const email=String(body.email||"").trim().toLowerCase();
+if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
+const id=crypto.randomUUID(),now=Date.now(),expires=now+7*86400000;
+await env.DB.prepare("INSERT INTO station_invitations(id,station_id,email,invited_by,created_at,expires_at,accepted_at) VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(station_id,email) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,created_at=excluded.created_at,expires_at=excluded.expires_at,accepted_at=NULL").bind(id,station.id,email,user.id,now,expires).run();
+return json({ok:true,email,expires_at:expires},201);
+}
+if(path==="/api/invitations"&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const rows=await env.DB.prepare("SELECT i.id,i.expires_at,s.name FROM station_invitations i JOIN stations s ON s.id=i.station_id JOIN users u ON u.auth_subject=i.email WHERE u.id=? AND i.accepted_at IS NULL AND i.expires_at>? ORDER BY i.created_at DESC LIMIT 30").bind(user.id,Date.now()).all();
+return json({invitations:rows.results});
+}
+const acceptInvite=path.match(/^\/api\/invitations\/([a-f0-9-]{36})\/accept$/);
+if(acceptInvite&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const invite=await env.DB.prepare("SELECT i.id,i.station_id FROM station_invitations i JOIN users u ON u.auth_subject=i.email WHERE i.id=? AND u.id=? AND i.accepted_at IS NULL AND i.expires_at>?").bind(acceptInvite[1],user.id,Date.now()).first();
+if(!invite)return json({error:"Uitnodiging ongeldig, verlopen of niet voor dit account"},403);
+await env.DB.prepare("INSERT OR IGNORE INTO station_members(station_id,user_id,role) VALUES(?,?,'member')").bind(invite.station_id,user.id).run();
+await env.DB.prepare("UPDATE station_invitations SET accepted_at=? WHERE id=? AND accepted_at IS NULL").bind(Date.now(),invite.id).run();
+return json({ok:true});
+}
 const roomSocket=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/live$/);
 if(roomSocket&&request.method==="GET"){
 if(request.headers.get("upgrade")?.toLowerCase()!=="websocket")return json({error:"WebSocket vereist"},426);
