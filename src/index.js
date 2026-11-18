@@ -122,6 +122,23 @@ if(!membership||!["owner","admin"].includes(membership.role))return json({error:
 const rows=await env.DB.prepare("SELECT l.id,l.action,l.target_user_id,l.details,l.created_at,u.display_name AS actor_name FROM station_audit_log l JOIN users u ON u.id=l.actor_user_id WHERE l.station_id=? ORDER BY l.created_at DESC LIMIT 100").bind(auditRoute[1]).all();
 return json({events:rows.results});
 }
+// Private direct messages: both participants must be members of the same station.
+const directRoute=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/direct\/([a-f0-9-]{36})$/);
+if(directRoute&&["GET","POST"].includes(request.method)){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const stationId=directRoute[1],otherId=directRoute[2];
+if(user.id===otherId)return json({error:"Je kunt jezelf geen privébericht sturen"},400);
+const members=await env.DB.prepare("SELECT user_id FROM station_members WHERE station_id=? AND user_id IN (?,?)").bind(stationId,user.id,otherId).all();
+if(members.results.length!==2)return json({error:"Beide accounts moeten lid zijn van dit station"},403);
+if(request.method==="GET"){
+const rows=await env.DB.prepare("SELECT id,sender_user_id,recipient_user_id,message,created_at FROM direct_messages WHERE station_id=? AND ((sender_user_id=? AND recipient_user_id=?) OR (sender_user_id=? AND recipient_user_id=?)) ORDER BY created_at DESC LIMIT 100").bind(stationId,user.id,otherId,otherId,user.id).all();
+return json({messages:rows.results.reverse()});
+}
+const message=String(body.message||"").trim();
+if(!message||message.length>2000)return json({error:"Bericht moet 1 tot 2000 tekens bevatten"},400);
+await env.DB.prepare("INSERT INTO direct_messages(id,station_id,sender_user_id,recipient_user_id,message,created_at) VALUES(?,?,?,?,?,?)").bind(crypto.randomUUID(),stationId,user.id,otherId,message,Date.now()).run();
+return json({ok:true},201);
+}
 // Station-scoped roles: owner is immutable; admins can manage DJs and members only.
 const stationMembers=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members$/);
 if(stationMembers&&request.method==="GET"){
