@@ -1,1 +1,8 @@
-{"name":"radioconnect","compatibility_date":"2026-11-18","assets":{"directory":"./public"}}
+{
+  "name": "radioconnect",
+  "compatibility_date": "2026-11-18",
+  "assets": {
+    "directory": "./public"
+  },
+  "previews": {}
+}
