@@ -100,6 +100,29 @@ const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND own
 if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
 return json({ok:true,id,name});
 }
+// Station-scoped roles: owner is immutable; admins can manage DJs and members only.
+const stationMembers=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members$/);
+if(stationMembers&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const me=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationMembers[1],user.id).first();
+if(!me||!["owner","admin"].includes(me.role))return json({error:"Geen beheerrechten"},403);
+const members=await env.DB.prepare("SELECT m.user_id,u.display_name,m.role,m.created_at FROM station_members m JOIN users u ON u.id=m.user_id WHERE m.station_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'dj' THEN 2 ELSE 3 END,u.display_name LIMIT 250").bind(stationMembers[1]).all();
+return json({members:members.results,your_role:me.role});
+}
+const changeMember=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members\/([a-f0-9-]{36})\/role$/);
+if(changeMember&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const stationId=changeMember[1],targetId=changeMember[2],role=String(body.role||"");
+if(!["admin","dj","member"].includes(role))return json({error:"Ongeldige rol"},400);
+const actor=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationId,user.id).first();
+if(!actor||!["owner","admin"].includes(actor.role))return json({error:"Geen beheerrechten"},403);
+const target=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationId,targetId).first();
+if(!target)return json({error:"Lid niet gevonden"},404);
+if(target.role==="owner"||targetId===user.id)return json({error:"Je kunt de eigenaar of je eigen rol niet wijzigen"},403);
+if(actor.role==="admin"&&(target.role==="admin"||role==="admin"))return json({error:"Alleen de eigenaar kan admins aanstellen of wijzigen"},403);
+await env.DB.prepare("UPDATE station_members SET role=? WHERE station_id=? AND user_id=? AND role=?").bind(role,stationId,targetId,target.role).run();
+return json({ok:true,role});
+}
 // Owners invite registered or future users by email; the invitee must explicitly accept.
 const stationInvite=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/invitations$/);
 if(stationInvite){
