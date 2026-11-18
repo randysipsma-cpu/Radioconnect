@@ -72,6 +72,14 @@ env.DB.prepare("INSERT INTO station_members(station_id,user_id,role) VALUES (?,?
 env.DB.prepare("INSERT INTO rooms(id,station_id,name,visibility) VALUES (?,?,'algemeen','members')").bind(crypto.randomUUID(),id)
 ]);return json({id,name,visibility:"private"},201);
 }
+if(/^\/api\/stations\/[a-f0-9-]{36}$/.test(path)&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const id=path.split("/")[3],name=String(body.name||"").trim();
+if(name.length<2||name.length>80)return json({error:"Stationsnaam moet 2 tot 80 tekens bevatten"},400);
+const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND owner_user_id=?").bind(name,id,user.id).run();
+if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
+return json({ok:true,id,name});
+}
 if(path==="/api/stations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
 const rows=await env.DB.prepare("SELECT s.id,s.name,s.visibility,m.role FROM stations s JOIN station_members m ON m.station_id=s.id WHERE m.user_id=? ORDER BY s.created_at DESC").bind(user.id).all();return json({stations:rows.results});
