@@ -80,6 +80,33 @@ const result=await env.DB.prepare("UPDATE stations SET name=? WHERE id=? AND own
 if(!result.meta?.changes)return json({error:"Station niet gevonden of geen eigenaarrechten"},403);
 return json({ok:true,id,name});
 }
+// Station-scoped private chat: every request checks membership server-side.
+const stationRooms=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/rooms$/);
+if(stationRooms&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const membership=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationRooms[1],user.id).first();
+if(!membership)return json({error:"Geen toegang tot dit privéradiostation"},403);
+const rooms=await env.DB.prepare("SELECT id,name,visibility FROM rooms WHERE station_id=? ORDER BY name LIMIT 100").bind(stationRooms[1]).all();
+return json({rooms:rooms.results});
+}
+const roomMessages=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/messages$/);
+if(roomMessages){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const room=await env.DB.prepare("SELECT r.id,r.station_id,r.visibility,m.role FROM rooms r JOIN station_members m ON m.station_id=r.station_id AND m.user_id=? WHERE r.id=?").bind(user.id,roomMessages[1]).first();
+if(!room)return json({error:"Geen toegang tot deze privéroom"},403);
+if(room.visibility==="management"&&!["owner","admin"].includes(room.role))return json({error:"Geen toegang tot deze beheerroom"},403);
+if(request.method==="POST"){
+const message=String(body.message||"").trim();
+if(message.length<1||message.length>2000)return json({error:"Bericht moet 1 tot 2000 tekens bevatten"},400);
+const id=crypto.randomUUID(),created=Date.now();
+await env.DB.prepare("INSERT INTO chat_messages(id,room_id,user_id,body,created_at) VALUES(?,?,?,?,?)").bind(id,room.id,user.id,message,created).run();
+return json({id,created_at:created},201);
+}
+const before=Number(url.searchParams.get("before")||0);
+if(before&&!Number.isSafeInteger(before))return json({error:"Ongeldige paginering"},400);
+const rows=await env.DB.prepare("SELECT c.id,c.body,c.created_at,u.display_name FROM chat_messages c JOIN users u ON u.id=c.user_id WHERE c.room_id=? AND (?=0 OR c.created_at<?) ORDER BY c.created_at DESC LIMIT 50").bind(room.id,before,before).all();
+return json({messages:rows.results.reverse()});
+}
 if(path==="/api/stations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
 const rows=await env.DB.prepare("SELECT s.id,s.name,s.visibility,m.role FROM stations s JOIN station_members m ON m.station_id=s.id WHERE m.user_id=? ORDER BY s.created_at DESC").bind(user.id).all();return json({stations:rows.results});
