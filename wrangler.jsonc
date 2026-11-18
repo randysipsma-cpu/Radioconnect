@@ -11,11 +11,33 @@
         "database_name": "radioconnect-db",
         "database_id": "5bbb908e-e22f-4a37-874d-e121ce6510ec"
       }
-    ]
+    ],
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "CHAT_ROOM",
+          "class_name": "ChatRoom"
+        }
+      ]
+    }
   },
   "main": "./src/index.js",
-  "durable_objects": {"bindings":[{"name":"CHAT_ROOM","class_name":"ChatRoom"}]},
-  "migrations":[{"tag":"v1-chat-room","new_sqlite_classes":["ChatRoom"]}],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHAT_ROOM",
+        "class_name": "ChatRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-chat-room",
+      "new_sqlite_classes": [
+        "ChatRoom"
+      ]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
