@@ -237,6 +237,28 @@ if(!membership)return json({error:"Geen toegang tot dit privéradiostation"},403
 const rooms=await env.DB.prepare("SELECT id,name,visibility FROM rooms WHERE station_id=? ORDER BY name LIMIT 100").bind(stationRooms[1]).all();
 return json({rooms:rooms.results});
 }
+// Emoji reactions and moderator/owner/admin pins; authorization always checked on the server.
+const chatAction=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/messages\/([a-f0-9-]{36})\/(react|pin)$/);
+if(chatAction&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const room=await env.DB.prepare("SELECT r.id,r.visibility,m.role FROM rooms r JOIN station_members m ON m.station_id=r.station_id AND m.user_id=? WHERE r.id=?").bind(user.id,chatAction[1]).first();
+if(!room||room.visibility==="management"&&!["owner","admin"].includes(room.role))return json({error:"Geen toegang"},403);
+const msg=await env.DB.prepare("SELECT id FROM chat_messages WHERE id=? AND room_id=?").bind(chatAction[2],room.id).first();
+if(!msg)return json({error:"Bericht niet gevonden"},404);
+if(chatAction[3]==="react"){
+const emoji=String(body.emoji||"");if(!["👍","❤️","😂","👏","🔥"].includes(emoji))return json({error:"Ongeldige reactie"},400);
+const exists=await env.DB.prepare("SELECT 1 AS present FROM chat_message_reactions WHERE message_id=? AND user_id=? AND emoji=?").bind(msg.id,user.id,emoji).first();
+if(exists)await env.DB.prepare("DELETE FROM chat_message_reactions WHERE message_id=? AND user_id=? AND emoji=?").bind(msg.id,user.id,emoji).run();
+else await env.DB.prepare("INSERT INTO chat_message_reactions(message_id,user_id,emoji,created_at) VALUES(?,?,?,?)").bind(msg.id,user.id,emoji,Date.now()).run();
+}else{
+if(!["owner","admin"].includes(room.role))return json({error:"Alleen beheerders mogen vastzetten"},403);
+const exists=await env.DB.prepare("SELECT 1 AS present FROM chat_message_pins WHERE message_id=?").bind(msg.id).first();
+if(exists)await env.DB.prepare("DELETE FROM chat_message_pins WHERE message_id=?").bind(msg.id).run();
+else await env.DB.prepare("INSERT INTO chat_message_pins(message_id,pinned_by,pinned_at) VALUES(?,?,?)").bind(msg.id,user.id,Date.now()).run();
+}
+if(env.CHAT_ROOM){try{const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));await stub.fetch("https://internal/broadcast",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"message_updated"})});}catch(error){console.error("Chat update broadcast failed",error);}}
+return json({ok:true});
+}
 const roomMessages=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/messages$/);
 if(roomMessages){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
@@ -255,7 +277,7 @@ return json({id,created_at:created},201);
 const before=Number(url.searchParams.get("before")||0);
 if(before&&!Number.isSafeInteger(before))return json({error:"Ongeldige paginering"},400);
 const rows=await env.DB.prepare("SELECT c.id,c.body,c.created_at,u.display_name FROM chat_messages c JOIN users u ON u.id=c.user_id WHERE c.room_id=? AND (?=0 OR c.created_at<?) ORDER BY c.created_at DESC LIMIT 50").bind(room.id,before,before).all();
-return json({messages:rows.results.reverse()});
+const messages=rows.results.reverse();const ids=messages.map(m=>m.id);if(ids.length){const reactions=await env.DB.prepare("SELECT r.message_id,r.emoji,COUNT(*) AS count FROM chat_message_reactions r JOIN chat_messages m ON m.id=r.message_id WHERE m.room_id=? GROUP BY r.message_id,r.emoji").bind(room.id).all();const pins=await env.DB.prepare("SELECT p.message_id FROM chat_message_pins p JOIN chat_messages m ON m.id=p.message_id WHERE m.room_id=?").bind(room.id).all();const pinned=new Set(pins.results.map(p=>p.message_id));for(const m of messages){m.pinned=pinned.has(m.id);m.reactions=reactions.results.filter(r=>r.message_id===m.id).map(r=>({emoji:r.emoji,count:r.count}));}}return json({messages,can_pin:["owner","admin"].includes(room.role)});
 }
 if(path==="/api/stations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
@@ -276,7 +298,7 @@ const pair=new WebSocketPair(),client=pair[0],server=pair[1];
 this.state.acceptWebSocket(server,["uid:"+id,"name:"+name]);
 this.presence();return new Response(null,{status:101,webSocket:client});
 }
-if(url.pathname==="/broadcast"&&request.method==="POST"){const data=await request.json();if(data?.type==="message")this.broadcast(data);return new Response("ok");}
+if(url.pathname==="/broadcast"&&request.method==="POST"){const data=await request.json();if(data?.type==="message"||data?.type==="message_updated")this.broadcast(data);return new Response("ok");}
 return new Response("Not found",{status:404});}
 webSocketMessage(socket,message){try{const data=JSON.parse(message);if(data.type==="typing"){const tags=this.state.getTags(socket),name=tags.find(x=>x.startsWith("name:"))?.slice(5);this.broadcast({type:"typing",name:decodeURIComponent(name||"Gebruiker"),active:!!data.active},socket);}}catch{}}
 webSocketClose(socket){try{socket.close();}catch{}this.presence();}
