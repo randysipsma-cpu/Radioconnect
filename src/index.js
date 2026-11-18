@@ -111,6 +111,15 @@ await env.DB.prepare("INSERT OR IGNORE INTO station_members(station_id,user_id,r
 await env.DB.prepare("UPDATE station_invitations SET accepted_at=? WHERE id=? AND accepted_at IS NULL").bind(Date.now(),invite.id).run();
 return json({ok:true});
 }
+const liveCheck=path.match(/^\\/api\\/rooms\\/([a-f0-9-]{36})\\/live-check$/);
+if(liveCheck&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({status:"error",code:"NOT_LOGGED_IN",error:"Je bent niet ingelogd"},401);
+const room=await env.DB.prepare("SELECT r.id,r.visibility,m.role FROM rooms r LEFT JOIN station_members m ON m.station_id=r.station_id AND m.user_id=? WHERE r.id=?").bind(user.id,liveCheck[1]).first();
+if(!room||!room.role)return json({status:"error",code:"NO_ACCESS",error:"Dit account heeft geen toegang tot deze room. Accepteer eerst de stationsuitnodiging."},403);
+if(room.visibility==="management"&&!["owner","admin"].includes(room.role))return json({status:"error",code:"NO_ACCESS",error:"Deze beheerroom is alleen voor beheerders"},403);
+if(!env.CHAT_ROOM)return json({status:"error",code:"BINDING_MISSING",error:"CHAT_ROOM is niet gekoppeld aan deze Cloudflare-deployment"},503);
+try{const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));const response=await stub.fetch("https://internal/health");if(!response.ok)throw Error("Durable Object health "+response.status);return json({status:"ok",code:"READY"});}catch(error){console.error("Room realtime health",error);return json({status:"error",code:"ROOM_UNREACHABLE",error:"Cloudflare realtime chatserver is niet bereikbaar"},503);}
+}
 const roomSocket=path.match(/^\/api\/rooms\/([a-f0-9-]{36})\/live$/);
 if(roomSocket&&request.method==="GET"){
 if(request.headers.get("upgrade")?.toLowerCase()!=="websocket")return json({error:"WebSocket vereist"},426);
