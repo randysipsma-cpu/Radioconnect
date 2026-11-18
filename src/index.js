@@ -8,6 +8,7 @@ function equal(a,b){if(a.length!==b.length)return false;let diff=0;for(let i=0;i
 function cookie(request){return request.headers.get("cookie")?.split(";").map(s=>s.trim()).find(s=>s.startsWith("rc_session="))?.slice(11)||"";}
 async function identity(request,db){const token=cookie(request);if(!/^[a-f0-9]{64}$/.test(token))return null;return db.prepare("SELECT users.id,users.display_name FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at > ?").bind(await digest(token),Date.now()).first();}
 async function audit(db,stationId,actorId,action,targetId,details={}){try{await db.prepare("INSERT INTO station_audit_log(id,station_id,actor_user_id,action,target_user_id,details,created_at) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),stationId,actorId,action,targetId||null,JSON.stringify(details),Date.now()).run();}catch(error){console.error("Station audit unavailable",error);}}
+async function notify(db,userId,stationId,kind,title,detail=""){try{await db.prepare("INSERT INTO user_notifications(id,user_id,station_id,kind,title,detail,created_at) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),userId,stationId||null,kind,title,detail.slice(0,300),Date.now()).run();}catch(error){console.error("Notification unavailable",error);}}
 const secureCookie=(token,maxAge)=>`rc_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=${maxAge}`;
 export default {async fetch(request,env){
 const url=new URL(request.url),path=url.pathname;
@@ -96,6 +97,17 @@ for(const value of [photo,social]){if(value){let parsed;try{parsed=new URL(value
 await env.DB.prepare("INSERT INTO dj_profiles(user_id,dj_name,bio,photo_url,social_url,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET dj_name=excluded.dj_name,bio=excluded.bio,photo_url=excluded.photo_url,social_url=excluded.social_url,updated_at=excluded.updated_at").bind(user.id,djName,bio,photo,social,Date.now()).run();
 return json({ok:true});
 }
+if(path==="/api/notifications"&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const rows=await env.DB.prepare("SELECT id,kind,title,detail,created_at,read_at FROM user_notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100").bind(user.id).all();
+return json({notifications:rows.results,unread:rows.results.filter(x=>x.read_at===null).length});
+}
+const readNotification=path.match(/^\/api\/notifications\/([a-f0-9-]{36})\/read$/);
+if(readNotification&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+await env.DB.prepare("UPDATE user_notifications SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL").bind(Date.now(),readNotification[1],user.id).run();
+return json({ok:true});
+}
 if(path==="/api/logout"&&request.method==="POST"){const token=cookie(request);if(/^[a-f0-9]{64}$/.test(token))await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return json({ok:true},200,{"set-cookie":secureCookie("",0)});}
 if(path==="/api/stations"&&request.method==="POST"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
@@ -145,6 +157,7 @@ return json({messages:rows.results.reverse()});
 const message=String(body.message||"").trim();
 if(!message||message.length>2000)return json({error:"Bericht moet 1 tot 2000 tekens bevatten"},400);
 await env.DB.prepare("INSERT INTO direct_messages(id,station_id,sender_user_id,recipient_user_id,message,created_at) VALUES(?,?,?,?,?,?)").bind(crypto.randomUUID(),stationId,user.id,otherId,message,Date.now()).run();
+await notify(env.DB,otherId,stationId,"direct_message","Nieuw privébericht",user.display_name+" heeft je een bericht gestuurd.");
 return json({ok:true},201);
 }
 // Station-scoped roles: owner is immutable; admins can manage DJs and members only.
@@ -192,7 +205,7 @@ const email=String(body.email||"").trim().toLowerCase();
 if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
 const id=crypto.randomUUID(),now=Date.now(),expires=now+7*86400000;
 await env.DB.prepare("INSERT INTO station_invitations(id,station_id,email,invited_by,created_at,expires_at,accepted_at) VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(station_id,email) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,created_at=excluded.created_at,expires_at=excluded.expires_at,accepted_at=NULL").bind(id,station.id,email,user.id,now,expires).run();
-await audit(env.DB,station.id,user.id,"invitation.create",null,{email});return json({ok:true,email,expires_at:expires,invite_url:url.origin+"/?invite="+encodeURIComponent(id)},201);
+const invited=await env.DB.prepare("SELECT id FROM users WHERE auth_subject=?").bind(email).first();if(invited)await notify(env.DB,invited.id,station.id,"invitation","Uitnodiging voor radiostation","Je bent uitgenodigd om lid te worden.");await audit(env.DB,station.id,user.id,"invitation.create",null,{email});return json({ok:true,email,expires_at:expires,invite_url:url.origin+"/?invite="+encodeURIComponent(id)},201);
 }
 if(path==="/api/invitations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
