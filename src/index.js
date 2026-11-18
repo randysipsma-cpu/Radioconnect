@@ -122,6 +122,14 @@ if(!membership||!["owner","admin"].includes(membership.role))return json({error:
 const rows=await env.DB.prepare("SELECT l.id,l.action,l.target_user_id,l.details,l.created_at,u.display_name AS actor_name FROM station_audit_log l JOIN users u ON u.id=l.actor_user_id WHERE l.station_id=? ORDER BY l.created_at DESC LIMIT 100").bind(auditRoute[1]).all();
 return json({events:rows.results});
 }
+const directContacts=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/contacts$/);
+if(directContacts&&request.method==="GET"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const member=await env.DB.prepare("SELECT 1 AS allowed FROM station_members WHERE station_id=? AND user_id=?").bind(directContacts[1],user.id).first();
+if(!member)return json({error:"Geen toegang tot dit station"},403);
+const rows=await env.DB.prepare("SELECT m.user_id,u.display_name,m.role FROM station_members m JOIN users u ON u.id=m.user_id WHERE m.station_id=? AND m.user_id<>? ORDER BY u.display_name LIMIT 250").bind(directContacts[1],user.id).all();
+return json({contacts:rows.results});
+}
 // Private direct messages: both participants must be members of the same station.
 const directRoute=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/direct\/([a-f0-9-]{36})$/);
 if(directRoute&&["GET","POST"].includes(request.method)){
