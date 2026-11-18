@@ -16,6 +16,16 @@ if(!["GET","POST"].includes(request.method))return json({error:"Methode niet toe
 if(request.method==="POST"&&(request.headers.get("origin")!==url.origin||!request.headers.get("content-type")?.startsWith("application/json")))return json({error:"Ongeldige aanvraag"},403);
 let body={};if(request.method==="POST"){if(Number(request.headers.get("content-length")||0)>4096)return json({error:"Aanvraag te groot"},413);try{body=await request.json();if(JSON.stringify(body).length>4096)throw Error();}catch{return json({error:"Ongeldige JSON"},400);}}
 try{
+if(path==="/api/health"&&request.method==="GET"){
+const checks={binding:"connected",database:"pending",users:"pending",credentials:"pending",sessions:"pending"};
+const run=async(label,sql)=>{try{await env.DB.prepare(sql).first();checks[label]="ok";}catch(err){const message=String(err?.message||err||"");checks[label]=/no such table/i.test(message)?"missing_table":/limit|quota|exceeded/i.test(message)?"quota_or_limit":"query_failed";console.error("Health check "+label,err);}};
+await run("database","SELECT 1 AS ok");
+await run("users","SELECT id FROM users LIMIT 1");
+await run("credentials","SELECT user_id FROM credentials LIMIT 1");
+await run("sessions","SELECT token_hash FROM sessions LIMIT 1");
+const ok=Object.values(checks).every(v=>v==="ok"||v==="connected");
+return json({status:ok?"ok":"degraded",checks},ok?200:503);
+}
 if(path==="/api/register"&&request.method==="POST"){
 const email=String(body.email||"").trim().toLowerCase(),password=String(body.password||""),name=String(body.name||"").trim();
 if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||password.length<12||password.length>128||name.length<2||name.length>80)return json({error:"Vul een geldige naam, e-mail en wachtwoord (minimaal 12 tekens) in"},400);
