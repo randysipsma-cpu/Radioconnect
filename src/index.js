@@ -16,6 +16,10 @@ if(!["GET","POST"].includes(request.method))return json({error:"Methode niet toe
 if(request.method==="POST"&&(request.headers.get("origin")!==url.origin||!request.headers.get("content-type")?.startsWith("application/json")))return json({error:"Ongeldige aanvraag"},403);
 let body={};if(request.method==="POST"){if(Number(request.headers.get("content-length")||0)>4096)return json({error:"Aanvraag te groot"},413);try{body=await request.json();if(JSON.stringify(body).length>4096)throw Error();}catch{return json({error:"Ongeldige JSON"},400);}}
 try{
+if(path==="/api/realtime-check"&&request.method==="GET"){
+if(!env.CHAT_ROOM)return json({status:"unavailable",binding:"missing",detail:"CHAT_ROOM Durable Object binding ontbreekt in deze deployment"},503);
+try{const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("radioconnect-diagnostic"));const result=await stub.fetch("https://internal/health");if(!result.ok)return json({status:"unavailable",binding:"present",durable_object:"failed",http_status:result.status},503);return json({status:"ok",binding:"present",durable_object:"reachable"});}catch(error){console.error("Realtime diagnostic",error);return json({status:"unavailable",binding:"present",durable_object:"failed",error_name:String(error?.name||"Error"),detail:String(error?.message||"Unknown").slice(0,180)},503);}
+}
 if(path==="/api/crypto-check"&&request.method==="GET"){
 // Isolated password-hashing self-test: no credentials, user data or D1 writes.
 try{
@@ -132,6 +136,7 @@ constructor(state,env){this.state=state;this.env=env;this.clients=new Map();}
 broadcast(data,exclude){const payload=JSON.stringify(data);for(const socket of this.state.getWebSockets()){if(socket===exclude)continue;try{socket.send(payload);}catch{try{socket.close();}catch{}}}}
 presence(){const clients=this.state.getWebSockets();const users=new Map();for(const socket of clients){const tags=this.state.getTags(socket);const id=tags.find(x=>x.startsWith("uid:"))?.slice(4),name=tags.find(x=>x.startsWith("name:"))?.slice(5);if(id)users.set(id,decodeURIComponent(name||"Gebruiker"));}this.broadcast({type:"presence",users:Array.from(users.values())});}
 async fetch(request){const url=new URL(request.url);
+if(url.pathname==="/health")return new Response("ok");
 if(url.pathname==="/connect"&&request.headers.get("upgrade")?.toLowerCase()==="websocket"){
 const id=request.headers.get("X-RC-User"),name=request.headers.get("X-RC-Name");if(!id||!name)return new Response("Forbidden",{status:403});
 const pair=new WebSocketPair(),client=pair[0],server=pair[1];
