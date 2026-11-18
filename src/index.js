@@ -82,6 +82,19 @@ await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,expires_at) VALUE
 return json({ok:true},200,{"set-cookie":secureCookie(token,604800)});
 }
 if(path==="/api/me"&&request.method==="GET"){const user=await identity(request,env.DB);return user?json({user}):json({user:null},401);}
+// DJ profile is owned by the authenticated user and shared across their stations.
+if(path==="/api/profile"&&["GET","POST"].includes(request.method)){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+if(request.method==="GET"){
+const profile=await env.DB.prepare("SELECT dj_name,bio,photo_url,social_url,updated_at FROM dj_profiles WHERE user_id=?").bind(user.id).first();
+return json({profile:profile||{dj_name:"",bio:"",photo_url:"",social_url:""}});
+}
+const djName=String(body.dj_name||"").trim(),bio=String(body.bio||"").trim(),photo=String(body.photo_url||"").trim(),social=String(body.social_url||"").trim();
+if(djName.length>80||bio.length>600||photo.length>500||social.length>500)return json({error:"Profielgegevens zijn te lang"},400);
+for(const value of [photo,social]){if(value){let parsed;try{parsed=new URL(value);}catch{return json({error:"Gebruik een geldige HTTPS-link"},400);}if(parsed.protocol!=="https:"||parsed.username||parsed.password)return json({error:"Gebruik een geldige HTTPS-link"},400);}}
+await env.DB.prepare("INSERT INTO dj_profiles(user_id,dj_name,bio,photo_url,social_url,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET dj_name=excluded.dj_name,bio=excluded.bio,photo_url=excluded.photo_url,social_url=excluded.social_url,updated_at=excluded.updated_at").bind(user.id,djName,bio,photo,social,Date.now()).run();
+return json({ok:true});
+}
 if(path==="/api/logout"&&request.method==="POST"){const token=cookie(request);if(/^[a-f0-9]{64}$/.test(token))await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return json({ok:true},200,{"set-cookie":secureCookie("",0)});}
 if(path==="/api/stations"&&request.method==="POST"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
