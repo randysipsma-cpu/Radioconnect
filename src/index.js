@@ -123,6 +123,17 @@ if(actor.role==="admin"&&(target.role==="admin"||role==="admin"))return json({er
 await env.DB.prepare("UPDATE station_members SET role=? WHERE station_id=? AND user_id=? AND role=?").bind(role,stationId,targetId,target.role).run();
 return json({ok:true,role});
 }
+// Removing a station member is restricted to owners and admins; the owner cannot be removed.
+const removeMember=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/members\/([a-f0-9-]{36})\/remove$/);
+if(removeMember&&request.method==="POST"){
+const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
+const stationId=removeMember[1],targetId=removeMember[2];
+const actor=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationId,user.id).first();
+const target=await env.DB.prepare("SELECT role FROM station_members WHERE station_id=? AND user_id=?").bind(stationId,targetId).first();
+if(!actor||!["owner","admin"].includes(actor.role)||!target||target.role==="owner"||targetId===user.id||actor.role==="admin"&&target.role==="admin")return json({error:"Geen rechten om dit lid te verwijderen"},403);
+await env.DB.prepare("DELETE FROM station_members WHERE station_id=? AND user_id=? AND role=?").bind(stationId,targetId,target.role).run();
+return json({ok:true});
+}
 // Owners invite registered or future users by email; the invitee must explicitly accept.
 const stationInvite=path.match(/^\/api\/stations\/([a-f0-9-]{36})\/invitations$/);
 if(stationInvite){
@@ -134,7 +145,7 @@ const email=String(body.email||"").trim().toLowerCase();
 if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json({error:"Ongeldig e-mailadres"},400);
 const id=crypto.randomUUID(),now=Date.now(),expires=now+7*86400000;
 await env.DB.prepare("INSERT INTO station_invitations(id,station_id,email,invited_by,created_at,expires_at,accepted_at) VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(station_id,email) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,created_at=excluded.created_at,expires_at=excluded.expires_at,accepted_at=NULL").bind(id,station.id,email,user.id,now,expires).run();
-return json({ok:true,email,expires_at:expires},201);
+return json({ok:true,email,expires_at:expires,invite_url:url.origin+"/?invite="+encodeURIComponent(id)},201);
 }
 if(path==="/api/invitations"&&request.method==="GET"){
 const user=await identity(request,env.DB);if(!user)return json({error:"Log eerst in"},401);
