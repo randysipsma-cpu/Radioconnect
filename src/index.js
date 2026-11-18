@@ -25,7 +25,7 @@ const second=await hashPassword("RadioConnect-TestPassword-2026!",salt);
 const different=await hashPassword("RadioConnect-TestPassword-2026?",salt);
 const ok=/^[a-f0-9]{64}$/.test(first)&&equal(first,second)&&!equal(first,different);
 return json({status:ok?"ok":"failed",checks:{pbkdf2:ok?"ok":"failed",deterministic:equal(first,second),password_separation:!equal(first,different)},database_untouched:true},ok?200:503);
-}catch(error){console.error("Crypto self-test failed",error);return json({status:"failed",checks:{pbkdf2:"failed"},database_untouched:true},503);}
+}catch(error){console.error("Crypto self-test failed",error);return json({status:"failed",checks:{pbkdf2:"failed"},diagnostic:{name:String(error?.name||"UnknownError"),message:String(error?.message||"No details").slice(0,180)},database_untouched:true},503);}
 }
 if(path==="/api/health"&&request.method==="GET"){
 const checks={binding:"connected",database:"pending",users:"pending",credentials:"pending",sessions:"pending"};
