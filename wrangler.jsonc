@@ -8,8 +8,8 @@
     "d1_databases": [
       {
         "binding": "DB",
-        "database_name": "radioconnect-db",
-        "database_id": "5bbb908e-e22f-4a37-874d-e121ce6510ec"
+        "database_name": "radioconnect-develop-db",
+        "database_id": "455e49e5-a229-4d3b-bb0b-0c5da14092c9"
       }
     ],
     "durable_objects": {
